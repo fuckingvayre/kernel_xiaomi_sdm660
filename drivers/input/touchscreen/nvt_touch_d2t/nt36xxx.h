@@ -220,6 +220,5 @@ extern int32_t nvt_check_fw_status(void);
 extern void nvt_esd_check_enable(uint8_t enable);
 #endif /* #if NVT_TOUCH_ESD_PROTECT */
 extern void nvt_stop_crc_reboot(void);
-extern int32_t nvt_get_lockdown_info(char *lockdata);
 
 #endif /* _LINUX_NVT_TOUCH_H */
