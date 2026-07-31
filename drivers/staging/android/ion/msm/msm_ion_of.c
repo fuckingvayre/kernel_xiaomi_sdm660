@@ -33,6 +33,10 @@ static struct ion_heap_desc ion_heap_meta[] = {
 		.name	= ION_SYSTEM_HEAP_NAME,
 	},
 	{
+		.id	= ION_CAMERA_HEAP_ID,
+		.name	= "camera_preview",
+	},
+	{
 		.id	= ION_SECURE_HEAP_ID,
 		.name	= ION_SECURE_HEAP_NAME,
 	},

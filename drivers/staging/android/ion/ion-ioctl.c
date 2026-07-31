@@ -4,6 +4,8 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/dma-buf.h>
+#include <linux/dma-mapping.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
@@ -14,6 +16,93 @@
 #ifdef CONFIG_ION_LEGACY
 #include "ion_legacy.h"
 #endif
+
+/*
+ * Legacy Qualcomm msm_ion cache maintenance ioctls.
+ *
+ * The old camera HAL (libmmqjpeg_codec.so / libqomx_jpegenc_pipe.so) calls
+ * these on ION fds before/after hardware DMA operations. The 4.4 msm_ion
+ * driver handled them directly; in 4.19 we translate them to dma_buf CPU access APIs.
+ *
+ * The HAL passes the ION fd (not handle) in the fd field of these structs.
+ */
+#define ION_IOC_MSM_MAGIC 'M'
+
+struct ion_flush_data {
+	__u64 handle;
+	__u64 fd;
+	__u64 offset;
+	__u64 length;
+	int direction;
+};
+
+struct ion_sync_data {
+	__u64 handle;
+	__u32 fd;
+	__u32 flags;
+};
+
+#define ION_IOC_SYNC		_IOWR(ION_IOC_MSM_MAGIC, 5, struct ion_sync_data)
+#define ION_IOC_CLEAN_CACHES	_IOWR(ION_IOC_MSM_MAGIC, 6, struct ion_flush_data)
+#define ION_IOC_INV_CACHES	_IOWR(ION_IOC_MSM_MAGIC, 7, struct ion_flush_data)
+
+static int ion_legacy_cache_ops(unsigned int cmd,
+				 struct ion_flush_data __user *user_data)
+{
+	struct ion_flush_data data;
+	struct dma_buf *dmabuf;
+	enum dma_data_direction dir = DMA_BIDIRECTIONAL;
+	int ret;
+
+	if (copy_from_user(&data, user_data, sizeof(data)))
+		return -EFAULT;
+
+	dmabuf = dma_buf_get((int)data.fd);
+	if (IS_ERR(dmabuf))
+		return PTR_ERR(dmabuf);
+
+	if (data.direction == 1)
+		dir = DMA_TO_DEVICE;
+	else if (data.direction == 2)
+		dir = DMA_FROM_DEVICE;
+
+	if (cmd == ION_IOC_CLEAN_CACHES) {
+		if (data.length)
+			ret = dma_buf_end_cpu_access_partial(dmabuf, dir,
+							     (unsigned int)data.offset,
+							     (unsigned int)data.length);
+		else
+			ret = dma_buf_end_cpu_access(dmabuf, dir);
+	} else {
+		if (data.length)
+			ret = dma_buf_begin_cpu_access_partial(dmabuf, dir,
+							       (unsigned int)data.offset,
+							       (unsigned int)data.length);
+		else
+			ret = dma_buf_begin_cpu_access(dmabuf, dir);
+	}
+
+	dma_buf_put(dmabuf);
+	return ret;
+}
+
+static int ion_legacy_sync(struct ion_sync_data __user *user_data)
+{
+	struct ion_sync_data data;
+	struct dma_buf *dmabuf;
+	int ret;
+
+	if (copy_from_user(&data, user_data, sizeof(data)))
+		return -EFAULT;
+
+	dmabuf = dma_buf_get(data.fd);
+	if (IS_ERR(dmabuf))
+		return PTR_ERR(dmabuf);
+
+	ret = dma_buf_end_cpu_access(dmabuf, DMA_BIDIRECTIONAL);
+	dma_buf_put(dmabuf);
+	return ret;
+}
 
 union ion_ioctl_arg {
 	struct ion_allocation_data allocation;
@@ -163,6 +252,13 @@ long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		data.fd.handle = data.fd.fd;
 		break;
 #endif
+	case ION_IOC_CLEAN_CACHES:
+	case ION_IOC_INV_CACHES:
+		return ion_legacy_cache_ops(cmd,
+					 (struct ion_flush_data __user *)arg);
+	case ION_IOC_SYNC:
+		return ion_legacy_sync(
+				(struct ion_sync_data __user *)arg);
 	default:
 		return -ENOTTY;
 	}
